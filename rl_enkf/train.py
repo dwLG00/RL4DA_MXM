@@ -58,7 +58,8 @@ def main():
     epoch_length = 500 # length of each episode
     eval_freq = 1500 # training steps before evaluating
 
-    training_env = Train(score='logsupnorm').rl_environment
+    #training_env = Train(score='logsupnorm').rl_environment
+    training_env = Train().rl_environment
     eval_env = Train(seed=1).rl_environment
     eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
         log_path='./logs/', eval_freq=eval_freq, deterministic=True,

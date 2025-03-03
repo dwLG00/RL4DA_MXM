@@ -64,6 +64,7 @@ class RLEnv(gym.Env):
 
         observation = H @ self.ground_truth + self.np_random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance)
         error = H @ forecast_mean - observation # error between observation and prior
+        self.last_obs = observation
 
         # Construct input vector (ensembles + error between forecast and observation)
         input_vector = np.concat((error, np.concat(self.ensembles)))

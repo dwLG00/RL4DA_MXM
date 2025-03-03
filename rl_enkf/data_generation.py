@@ -4,6 +4,37 @@ from l96 import L96
 from enkf import eakf
 from tqdm import tqdm
 
+def generate_eakf(**kwargs):
+    N, F, timesteps, dt = kwargs.get('l96_args')
+    system = L96(N, F)
+    initial_condition = kwargs.get('initial_condition')
+    ensemble_condition = kwargs.get('ensemble_condition')
+    Nens = kwargs.get('Nens', N // 2)
+    noise = kwargs.get('noise', 0.1)
+
+    H = np.eye(N)
+    R = np.eye(N)
+    ground_truth = initial_condition()
+    ensembles = [ensemble_condition() for _ in range(Nens)]
+
+    l96_data = generate_l96(N, F, timesteps, dt)
+    t = 0
+
+    priors = []
+    observation_differences = []
+    for i in tqdm(range(timesteps - 1)):
+        posteriors = (runge_kutta_4(system.dx, ensemble, t, dt) for ensemble in ensembles)
+        posterior_mean = mean(posteriors)
+        obs = H @ l96_data[i, :]
+        obs_diff = obs - posterior_mean
+        new_priors = eakf(Nens, N, np.stack(ensembles, 1), H, noise, False, None, obs)
+        ensemble_concat = np.concat(ensembles)
+        priors.append(ensembles_concat)
+        observation_differences.append(new_priors)
+        ensembles = np.unstack(new_priors)
+
+    return l96_data, priors, observation_differences
+
 def generate_l96(N, F, timesteps, dt):
     '''Generate l96 data using runge-kutta approx.
     Initial conditions will be initialized to [F, ..., F] + N(0, 0.01)
