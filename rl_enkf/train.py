@@ -7,10 +7,10 @@ from stable_baselines3 import SAC, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize, VecMonitor
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 class Train:
-    def __init__(self, N=8, F=5, Nens=8, action_coef=1, observation_coef=1, score='rmse', seed=0):
+    def __init__(self, N=8, F=5, Nens=8, action_coef=1, observation_coef=1, score='rmse', seed=0, debug=False):
         self.N = N
         self.F = F
         self.Nens = Nens
@@ -34,7 +34,7 @@ class Train:
         '''
 
         action_space = gym.spaces.Box(low=-1, high=1, shape=(self.Nens * self.N,), dtype="float32")
-        observation_space = gym.spaces.Box(low=-1, high=1, shape=((self.Nens + 1) * self.N,), dtype="float32")
+        observation_space = gym.spaces.Box(low=-10, high=10, shape=((self.Nens + 1) * self.N,), dtype="float32")
 
         #initial_ensemble_noise = (np.zeros(self.N), identity)
         initial_ensemble_noise = (np.zeros(self.N), np.eye(observation_dimension) * noise)
@@ -42,7 +42,48 @@ class Train:
 
         self.rl_environment = RLEnv(derivative_func, state_dimension=self.N, observation_dimension=self.N, Nens=self.Nens,
             action_space=action_space, observation_space=observation_space, H=identity, noise=noise, initial_condition=initial_condition,
-            initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule, seed=seed, score=score)
+            initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule, seed=seed, score=score, debug=debug)
+
+# use for debugging
+def value_callback(_locals, _globals):
+    model = _locals['self']  # get ppo model
+    obs = _locals['obs']  # current batch of observations
+    values = model.policy.predict_values(obs)  # get critic estimates
+    print(f"Mean predicted value: {values.mean():.2f}, Std: {values.std():.2f}")
+    return True  # continue training
+
+class CustomEvalCallback(BaseCallback):
+    def __init__(self, env, timesteps, verbose=0, eval_freq=500):
+        super().__init__(verbose)
+        self.env = env
+        self.eval_freq = eval_freq
+        self.timesteps = timesteps
+
+    def _on_step(self):
+        if self.n_calls % self.eval_freq != 0:
+            return True
+
+        obs, info = self.env.reset()
+        observations = []
+        scores = []
+        observations.append(obs)
+
+        for i in range(self.timesteps):
+            last_obs = observations[-1]
+            prediction = self.model.predict(last_obs, deterministic=True)[0]
+            next_obs, score, terminate, _, info = self.env.step(prediction)
+            observations.append(next_obs)
+            scores.append(score)
+            if terminate:
+                break
+
+        scores = np.array(scores)
+        obs_tensor = torch.tensor(np.array(observations), device='cpu')
+        values = self.model.policy.predict_values(obs_tensor)
+        if self.verbose: print(scores)
+        print(f"Episode reward: {scores.sum():.2f}, Std: {scores.std():.2f} from {scores.shape[0]} timesteps")
+        print(f"Mean predicted value: {values.mean():.2f}, Std: {values.std():.2f}")
+        return True
 
 def main():
     device = torch.device("cpu")
@@ -61,14 +102,21 @@ def main():
     #training_env = Train(score='logsupnorm').rl_environment
     training_env = Train().rl_environment
     eval_env = Train(seed=1).rl_environment
-    eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
-        log_path='./logs/', eval_freq=eval_freq, deterministic=True,
-        render=False)
+    #eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
+    #    log_path='./logs/', eval_freq=eval_freq, deterministic=True,
+    #    render=False)
+    eval_callback = CustomEvalCallback(eval_env, epoch_length, eval_freq=eval_freq)
 
     model = PPO("MlpPolicy", training_env,
         n_steps=epoch_length,
         n_epochs=n_epochs,
-        batch_size=epoch_length // 20,
+        batch_size=epoch_length // 10,
+        gamma=0.98, # reduce time horizon
+        ent_coef=0.15,
+        vf_coef=0.1,
+        clip_range_vf=0.2,
+        learning_rate=1e-5,
+        #clip_range=0.1,
         verbose=2
     )
     model.learn(
@@ -76,6 +124,7 @@ def main():
         log_interval=1,
         progress_bar=False,
         callback=eval_callback
+    #    callback=value_callback
     )
     model.save("lorenz96")
 

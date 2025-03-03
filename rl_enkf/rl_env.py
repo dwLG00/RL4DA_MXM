@@ -4,8 +4,10 @@ from enkf import eakf
 
 class RLEnv(gym.Env):
     def __init__(self, derivative_func, dt=0.1, state_dimension=None, observation_dimension=None, Nens=40, action_space=None, observation_space=None, H=None, noise=None, initial_condition=None,
-        initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None, score=None):
+        initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None, score=None, debug=None, **kwargs):
         super(RLEnv, self).__init__()
+
+        self.debug = debug
 
         self.dx = derivative_func # dx(x, t) is derivative at time t at pos x
         self.dt = dt # each timestep
@@ -28,34 +30,44 @@ class RLEnv(gym.Env):
         self.score_type = score if score != None else 'rmse'
 
         self.T = 0
+        self.count = 0
         self.last_obs = None
         self.seed = seed
 
     def score(self, zens, action):
         if self.score_type == 'rmse':
-            return -np.sqrt(np.mean((zens - action)**2))
+            score = -np.sqrt(np.mean((zens - action)**2))
         elif self.score_type == 'supnorm':
-            return -np.linalg.norm(zens - action, ord=np.inf)
+            score = -np.linalg.norm(zens - action, ord=np.inf)
         elif self.score_type == 'logsupnorm':
-            return -np.log(np.linalg.norm(zens - action, ord=np.inf))
+            score = -np.log(np.linalg.norm(zens - action, ord=np.inf))
+        return score
 
     def step(self, action):
         H = self.observation_matrix
 
         # see how the enkf model would have updated the ensemble
         zens = np.stack(self.ensembles, 1)
-        zens = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, False, None, self.last_obs)
+        updated_zens = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, False, None, self.last_obs)
+        zens_diff = np.concatenate(np.unstack(zens - updated_zens))
+
+        ensemble_diffs = np.split(action, self.ensemble_size)
+        new_ensemble = list(map(lambda t: t[0] + t[1], zip(self.ensembles, ensemble_diffs))) # add action to each ensemble member. Assumption is that the update per step is sufficiently small
 
         # get rmse between enkf-predicted update and action to get score
-        zens = np.concatenate(np.unstack(zens))
-        rmse = np.sqrt(np.mean((zens - action)**2))
-        score = self.score(zens, action)
+        zens = np.concatenate(np.unstack(updated_zens))
+        score = self.score(zens_diff, action)
+        if self.count == 0 and self.debug:
+            print('zens_diff: %s' % zens_diff)
+            print('action: %s' % action)
+            print('rmse score: %s' % score)
 
         # Now forward-pass the ground truth, compute forecast, and get observation
         self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt)
 
         # Compute forecast, observe next step to get error
-        self.ensembles = np.split(action, self.ensemble_size)
+        #self.ensembles = np.split(action, self.ensemble_size)
+        self.ensembles = np.unstack(updated_zens)
         priors = [
             runge_kutta_4(self.dx, ensemble, self.T, self.dt)
             for ensemble in self.ensembles
@@ -70,6 +82,7 @@ class RLEnv(gym.Env):
         input_vector = np.concat((error, np.concat(self.ensembles)))
         #input_vector = np.concat((error, np.concat(priors)))
         self.T += self.dt
+        self.count += 1
 
 
         return input_vector, score, self.termination_rule(self.T, self.ensembles), False, self.__get_info()
