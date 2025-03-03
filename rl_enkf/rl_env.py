@@ -4,7 +4,7 @@ from enkf import eakf
 
 class RLEnv(gym.Env):
     def __init__(self, derivative_func, dt=0.1, state_dimension=None, observation_dimension=None, Nens=40, action_space=None, observation_space=None, H=None, noise=None, initial_condition=None,
-        initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None):
+        initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None, score=None):
         super(RLEnv, self).__init__()
 
         self.dx = derivative_func # dx(x, t) is derivative at time t at pos x
@@ -25,10 +25,19 @@ class RLEnv(gym.Env):
         )
         self.action_space = action_space
         self.observation_space = observation_space
+        self.score_type = score if score != None else 'rmse'
 
         self.T = 0
         self.last_obs = None
         self.seed = seed
+
+    def score(self, zens, action):
+        if self.score_type == 'rmse':
+            return -np.sqrt(np.mean((zens - action)**2))
+        elif self.score_type == 'supnorm':
+            return -np.linalg.norm(zens - action, ord=np.inf)
+        elif self.score_type == 'logsupnorm':
+            return -np.log(np.linalg.norm(zens - action, ord=np.inf))
 
     def step(self, action):
         H = self.observation_matrix
@@ -40,6 +49,7 @@ class RLEnv(gym.Env):
         # get rmse between enkf-predicted update and action to get score
         zens = np.concatenate(np.unstack(zens))
         rmse = np.sqrt(np.mean((zens - action)**2))
+        score = self.score(zens, action)
 
         # Now forward-pass the ground truth, compute forecast, and get observation
         self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt)
@@ -60,7 +70,8 @@ class RLEnv(gym.Env):
         #input_vector = np.concat((error, np.concat(priors)))
         self.T += self.dt
 
-        return input_vector, -rmse, self.termination_rule(self.T, self.ensembles), False, self.__get_info()
+
+        return input_vector, score, self.termination_rule(self.T, self.ensembles), False, self.__get_info()
 
     def reset(self, seed=None, **kwargs):
         if not self.seed:
@@ -109,3 +120,4 @@ def runge_kutta_4(func, x0, t, dt):
     k4 = func(x0 + dt * k3, t + dt)
 
     return x0 + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+

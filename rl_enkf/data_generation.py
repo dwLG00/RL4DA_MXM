@@ -13,7 +13,7 @@ def generate_l96(N, F, timesteps, dt):
     data = [u0]
     t = 0
 
-    for i in tqdm(range(timesteps)):
+    for i in tqdm(range(timesteps - 1)):
         u = data[-1]
         u = runge_kutta_4(system.dx, u, t, dt)
         data.append(u)

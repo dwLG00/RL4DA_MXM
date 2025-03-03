@@ -10,7 +10,7 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.callbacks import EvalCallback
 
 class Train:
-    def __init__(self, N=8, F=5, Nens=8, action_coef=1, observation_coef=1, seed=0):
+    def __init__(self, N=8, F=5, Nens=8, action_coef=1, observation_coef=1, score='rmse', seed=0):
         self.N = N
         self.F = F
         self.Nens = Nens
@@ -42,7 +42,7 @@ class Train:
 
         self.rl_environment = RLEnv(derivative_func, state_dimension=self.N, observation_dimension=self.N, Nens=self.Nens,
             action_space=action_space, observation_space=observation_space, H=identity, noise=noise, initial_condition=initial_condition,
-            initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule, seed=seed)
+            initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule, seed=seed, score=score)
 
 def main():
     device = torch.device("cpu")
@@ -58,7 +58,7 @@ def main():
     epoch_length = 500 # length of each episode
     eval_freq = 1500 # training steps before evaluating
 
-    training_env = Train().rl_environment
+    training_env = Train(score='logsupnorm').rl_environment
     eval_env = Train(seed=1).rl_environment
     eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
         log_path='./logs/', eval_freq=eval_freq, deterministic=True,
