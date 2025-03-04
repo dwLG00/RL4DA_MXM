@@ -49,13 +49,13 @@ class RLEnv(gym.Env):
         # see how the enkf model would have updated the ensemble
         zens = np.stack(self.ensembles, 1)
         updated_zens = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, False, None, self.last_obs)
-        zens_diff = np.concatenate(np.unstack(zens - updated_zens))
+        zens_diff = np.concatenate(np.unstack(zens - updated_zens, axis=1))
 
         ensemble_diffs = np.split(action, self.ensemble_size)
         new_ensemble = list(map(lambda t: t[0] + t[1], zip(self.ensembles, ensemble_diffs))) # add action to each ensemble member. Assumption is that the update per step is sufficiently small
 
         # get rmse between enkf-predicted update and action to get score
-        zens = np.concatenate(np.unstack(updated_zens))
+        zens = np.concatenate(np.unstack(updated_zens, axis=1))
         score = self.score(zens_diff, action)
         if self.count == 0 and self.debug:
             print('zens_diff: %s' % zens_diff)
@@ -67,7 +67,7 @@ class RLEnv(gym.Env):
 
         # Compute forecast, observe next step to get error
         #self.ensembles = np.split(action, self.ensemble_size)
-        self.ensembles = np.unstack(updated_zens)
+        self.ensembles = np.unstack(updated_zens, axis=1)
         priors = [
             runge_kutta_4(self.dx, ensemble, self.T, self.dt)
             for ensemble in self.ensembles
@@ -199,7 +199,7 @@ class RLEnsembleWiseEnv(gym.Env):
             zens = np.stack(self.ensembles, 1)
             true_ensemble = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, False, None, self.last_obs)
             true_ensemble_diff = true_ensemble - zens
-            self.true_ensemble_diff = np.unstack(true_ensemble_diff)
+            self.true_ensemble_diff = np.unstack(true_ensemble_diff, axis=1)
             self.T += self.dt
         else:
             score = 0
@@ -242,7 +242,7 @@ class RLEnsembleWiseEnv(gym.Env):
         zens = np.stack(self.ensembles, 1)
         true_ensemble = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, False, None, self.last_obs)
         true_ensemble_diff = true_ensemble - zens
-        self.true_ensemble_diff = np.unstack(true_ensemble_diff)
+        self.true_ensemble_diff = np.unstack(true_ensemble_diff, axis=1)
 
         # construct our RL model input vector
         input_vector = np.concat((np.array([0]), error, self.ensembles[0])) # first step is the first ensemble member
