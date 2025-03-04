@@ -1,4 +1,4 @@
-from rl_env import RLEnv
+from rl_env import RLEnv, RLEnsembleWiseEnv
 from l96 import L96
 import gymnasium as gym
 import numpy as np
@@ -10,7 +10,7 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 class Train:
-    def __init__(self, N=8, F=5, Nens=8, action_coef=1, observation_coef=1, score='rmse', seed=0, debug=False):
+    def __init__(self, N=40, F=5, Nens=20, action_coef=1, observation_coef=1, score='rmse', seed=0, debug=False, model=RLEnv):
         self.N = N
         self.F = F
         self.Nens = Nens
@@ -40,7 +40,7 @@ class Train:
         initial_ensemble_noise = (np.zeros(self.N), np.eye(observation_dimension) * noise)
         termination_rule = lambda t, ens: t > 100
 
-        self.rl_environment = RLEnv(derivative_func, state_dimension=self.N, observation_dimension=self.N, Nens=self.Nens,
+        self.rl_environment = model(derivative_func, state_dimension=self.N, observation_dimension=self.N, Nens=self.Nens,
             action_space=action_space, observation_space=observation_space, H=identity, noise=noise, initial_condition=initial_condition,
             initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule, seed=seed, score=score, debug=debug)
 
@@ -100,8 +100,8 @@ def main():
     eval_freq = 1500 # training steps before evaluating
 
     #training_env = Train(score='logsupnorm').rl_environment
-    training_env = Train().rl_environment
-    eval_env = Train(seed=1).rl_environment
+    training_env = Train(model=RLEnsembleWiseEnv).rl_environment
+    eval_env = Train(model=RLEnsembleWiseEnv, seed=1).rl_environment
     #eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
     #    log_path='./logs/', eval_freq=eval_freq, deterministic=True,
     #    render=False)
@@ -110,12 +110,13 @@ def main():
     model = PPO("MlpPolicy", training_env,
         n_steps=epoch_length,
         n_epochs=n_epochs,
-        batch_size=epoch_length // 10,
-        gamma=0.98, # reduce time horizon
-        ent_coef=0.15,
-        vf_coef=0.1,
-        clip_range_vf=0.2,
-        learning_rate=1e-5,
+        batch_size=epoch_length // 5,
+        #batch_size=epoch_length // 10,
+        #gamma=0.98, # reduce time horizon
+        #ent_coef=0.15,
+        #vf_coef=0.1,
+        #clip_range_vf=0.2,
+        #learning_rate=1e-5,
         #clip_range=0.1,
         verbose=2
     )

@@ -133,8 +133,8 @@ class RLEnsembleWiseEnv(gym.Env):
         Instead of computing a single timestep with each step, each step will compute a single timestep _for a single ensemble member_.
         Only after computing all ensemble members will a reward be provided.
     '''
-    def __init__(self, derivative_func, dt=0.1, state_dimension=None, observation_dimension=None, Nens=40, action_space=None, observation_space=None, H=None, noise=None, initial_condition=None,
-        initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None, score=None, debug=None, **kwargs):
+    def __init__(self, derivative_func, dt=0.1, state_dimension=None, observation_dimension=None, Nens=40, action_space=None, observation_space=None, observation_bounds=1, H=None, noise=None,
+        initial_condition=None, initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None, score=None, debug=None, **kwargs):
         super(RLEnsembleWiseEnv, self).__init__()
 
         self.debug = debug
@@ -155,8 +155,17 @@ class RLEnsembleWiseEnv(gym.Env):
             ground_truth_forward if ground_truth_forward != None
             else lambda x0, t, dt: runge_kutta_4(self.dx, x0, t, dt)
         )
-        self.action_space = action_space
-        self.observation_space = observation_space
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(self.state_dimension,), dtype=np.float32)
+        #self.observation_space = gym.spaces.Tuple((
+        #    gym.spaces.Discrete(self.ensemble_size),
+        #    gym.spaces.Box(low=-observation_bounds, high=observation_bounds, shape=(self.state_dimension,), dtype=np.float32),
+        #    gym.spaces.Box(low=-observation_bounds, high=observation_bounds, shape=(self.state_dimension,), dtype=np.float32)
+        #))
+        self.observation_space = gym.spaces.Box(
+            low=np.array([0] + [-observation_bounds] * 2 * self.state_dimension),
+            high=np.array([self.ensemble_size] + [observation_bounds] * 2 * self.state_dimension),
+            dtype=np.float32
+        )
         self.score_type = score if score != None else 'rmse'
 
         self.T = 0
@@ -167,7 +176,8 @@ class RLEnsembleWiseEnv(gym.Env):
         self.actions = []
         self.seed = seed
 
-    def score(self, zens, action): if self.score_type == 'rmse':
+    def score(self, zens, action):
+        if self.score_type == 'rmse':
             score = -np.sqrt(np.mean((zens - action)**2))
         elif self.score_type == 'supnorm':
             score = -np.linalg.norm(zens - action, ord=np.inf)
@@ -178,17 +188,26 @@ class RLEnsembleWiseEnv(gym.Env):
     def step(self, action):
         index = (self.count - 1) % self.ensemble_size # 0-indexed ensemble index
         next_index = self.count % self.ensemble_size
-        true_ensemble_diff = self.true_ensemble_diff[index] # the actual EnKF updated ensemble value
-        self.errors.append(action - true_ensemble_diff)
+        #true_ensemble_diff = self.true_ensemble_diff[index] # the actual EnKF updated ensemble value
+        #self.errors.append(action - true_ensemble_diff)
+        self.actions.append(action)
 
         if self.count % self.ensemble_size == 0: # we've processed each ensemble
+        #if len(self.actions) == self.ensemble_size:
+            H = self.observation_matrix
             # Compute score
+            assert len(self.actions) == self.ensemble_size
             all_actions = np.concat(self.actions)
             all_diffs = np.concat(self.true_ensemble_diff)
             score = self.score(all_diffs, all_actions)
 
             # forward timestep pass
             self.ensembles = [sum(z) for z in zip(self.ensembles, self.true_ensemble_diff)] # remember, true_ensemble_diff is the difference between zens (= self.ensembles) and the true (kalman) ensemble
+            priors = [
+                runge_kutta_4(self.dx, ensemble, self.T, self.dt)
+                for ensemble in self.ensembles
+            ]
+            forecast_mean = sum(priors) / self.ensemble_size
             self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt) # update the ground truth
             observation = H @ self.ground_truth + self.np_random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance) # get observation, errors, and set them
             error = H @ forecast_mean - observation
@@ -201,10 +220,15 @@ class RLEnsembleWiseEnv(gym.Env):
             true_ensemble_diff = true_ensemble - zens
             self.true_ensemble_diff = np.unstack(true_ensemble_diff, axis=1)
             self.T += self.dt
+
+            # reset things
+            self.actions = []
         else:
             score = 0
 
         next_obs = np.concat([np.array([next_index]), self.last_error, self.ensembles[next_index]])
+        #next_obs = (next_index, self.last_error, self.ensembles[next_index])
+        self.count += 1
 
         return next_obs, score, self.termination_rule(self.T, self.ensembles), False, self.__get_info()
 
@@ -215,6 +239,7 @@ class RLEnsembleWiseEnv(gym.Env):
             super().reset(seed=self.seed)
 
         self.T = 0
+        self.count = 0
         self.last_obs = None
         self.last_error = None
         self.true_ensemble_diff = []
@@ -245,11 +270,12 @@ class RLEnsembleWiseEnv(gym.Env):
         self.true_ensemble_diff = np.unstack(true_ensemble_diff, axis=1)
 
         # construct our RL model input vector
-        input_vector = np.concat((np.array([0]), error, self.ensembles[0])) # first step is the first ensemble member
+        #observation = (0, error, self.ensembles[0])
+        observation = np.concatenate((np.array([0]), error, self.ensembles[0]))
         self.T += self.dt
         self.count += 1
 
-        return input_vector, self.__get_info()
+        return observation, self.__get_info()
 
     def __get_info(self):
         return {
