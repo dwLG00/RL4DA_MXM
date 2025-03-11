@@ -1,36 +1,42 @@
 import numpy as np
-import pandas as pd
+
 from l96 import L96
 from enkf import eakf
 from tqdm import tqdm
 
-def generate_eakf(l96_args=(40, 8, 3600, 0.1), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1):
-    N, F, timesteps, dt = l96_args
-    system = L96(N, F)
+def construct_GC(cut, l, ylocs):
+    """
+    Construct the Gaspari and Cohn localization matrix for a 1D field. 
+    The localization matrix is multiplied as the Schur product to the Kalman gain matrix.
 
-    H = np.eye(N)
-    R = np.eye(N)
-    ground_truth = initial_condition()
-    ensembles = [ensemble_condition() for _ in range(Nens)]
+    more on localization: Distance-Dependent Filtering of Background Error Covariance Estimates in an Ensemble Kalman Filter - Hamill, 2001
 
-    l96_data = generate_l96(N, F, timesteps, dt)
-    t = 0
+    Parameters:
+        cut (float): Localization cutoff distance.
+        l (array): 1D coordinates of the model grids [x1, x2, ...].
+        ylocs (array): 1D coordinates of the observations locations [y1, y2, ...].
 
-    posteriors = []
-    observation_differences = []
-    for i in tqdm(range(timesteps)):
-        priors = [runge_kutta_4(system.dx, ensemble, t, dt) for ensemble in ensembles]
-        prior_mean = np.mean(priors)
-        obs = H @ l96_data[i, :]
-        error = obs - prior_mean
-        stacked_ensembles = np.stack(ensembles, 1)
-        new_posteriors = eakf(Nens, N, stacked_ensembles, H, noise, False, None, obs)
-        ensemble_concat = np.concat(ensembles)
-        posteriors.append(ensemble_concat)
-        ensembles = np.unstack(new_posteriors, axis=1)
-        observation_differences.append(error)
+    Returns:
+        np.ndarray: Localization matrix of shape (len(ylocs), len(l)).
+    """
+    nobs = len(ylocs)
+    V = np.zeros((nobs, l))
 
-    return l96_data, posteriors, observation_differences
+    for iobs in range(0, nobs):
+        yloc = ylocs[iobs]
+        for iCut in range(0, l):
+            dist = min(abs(iCut - yloc), abs(iCut - l - yloc), abs(iCut + l - yloc))
+            r = dist / (0.5 * cut)
+
+            if dist >= cut:
+                V[iobs, iCut] = 0.0
+            elif 0.5*cut <= dist < cut:
+                V[iobs, iCut] = r**5 / 12.0 - r**4 / 2.0 + r**3 * 5.0 / 8.0 + r**2 * 5.0 / 3.0 - 5.0 * r + 4.0 - 2.0 / (3.0 * r)
+            else:
+                V[iobs, iCut] = r**5 * (-0.25) + r**4 / 2.0 + r**3 * 5.0/8.0 - r**2 * 5.0/3.0 + 1.0
+
+    return V
+
 
 def generate_l96(N, F, timesteps, dt):
     '''Generate l96 data using runge-kutta approx.
@@ -49,6 +55,7 @@ def generate_l96(N, F, timesteps, dt):
 
     return np.array(data)
 
+
 def runge_kutta_4(func, x0, t, dt):
     '''Apply runge-kutta to a function'''
     k1 = func(x0, t)
@@ -58,28 +65,73 @@ def runge_kutta_4(func, x0, t, dt):
 
     return x0 + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-if __name__ == '__main__':
-    import inspect
-    N = 40
-    F = 8
-    timesteps = 3600 * 20
-    dt = 0.05
-    noise = (0, 0.1)
-    #data = generate_l96(N, F, timesteps, dt)
-    initial_condition = lambda: np.ones(N, dtype=np.float32) + np.random.multivariate_normal(noise[0] * np.ones(N), noise[1] * np.eye(N))
-    data, posteriors, obs_differences = generate_eakf(l96_args=(N, F, timesteps, dt),
-        initial_condition=initial_condition, ensemble_condition=initial_condition,
-        Nens=20, noise=0.1)
+def rmse(a, b):
+    return np.sqrt(np.linalg.norm(a - b) / N)
 
-    posteriors = np.array(posteriors)
-    obs_differences = np.array(obs_differences)
-    print('shapes: data %s, posts %s, obsdiffs %s' % (data.shape, posteriors.shape, obs_differences.shape))
-    concatted = np.concatenate([data, posteriors, obs_differences], axis=1)
-    df = pd.DataFrame(concatted)
-    df.to_csv(f'./data/lorenz96_N{N}_F{F}_enkf.csv')
-    with open(f'./data/lorenz96_N{N}_F{F}_enkf.txt', 'w') as f:
-        f.write(f'Shape: stack[data: {data.shape}, posteriors: {data.shape}, obsdiff: {obs_differences.shape}]\n')
-        f.write(f'Parameters: N={N}, F={F}, timesteps={timesteps}, dt={dt}\n')
-        f.write(f'Initial condition: noise mean {noise[0]}, noise variance {noise[1]}, base value np.ones(N, dtype=float32)')
-        #initial_condition_string = ' = '.join(str(inspect.getsourcelines(initial_condition)[0]).strip("['\\n']").split(" = ")[1:]) # don't question it
-        #f.write('Initial condition: `%s`' % initial_condition)
+def mae(a, b):
+    return np.mean(np.abs(a - b))
+
+
+def generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, inflation_coef=1.1, distance=rmse):
+    N, F, timesteps, dt, obs_freq = l96_args
+    system = L96(N, F)
+
+    H = np.eye(N)
+    R = np.eye(N) * noise
+    ground_truth = initial_condition() # (N,) array of initial points
+    ensembles = [ensemble_condition() for _ in range(Nens)] # (N, Nens) array, this is the ensemble around each truth
+    l96_data = generate_l96(N, F, timesteps * obs_freq + 1, dt) # generate trailing, as we don't use the first data point
+    t = 0
+
+    CMat = construct_GC(3, N, np.arange(0, N))
+
+    background_error, analysis_error = [], []
+    for i in tqdm(range(1, timesteps)):
+        priors = ensembles[:]
+        for _ in range(obs_freq):
+            priors = [runge_kutta_4(system.dx, ensemble, t, dt) for ensemble in priors]
+            t += dt
+        prior_mean = np.mean(priors) # prior mean
+        gt = l96_data[i * obs_freq, :] # ground truth
+        background_error.append(distance(gt, prior_mean)) # forecast vs ground truth
+
+        obs = H @ gt + np.random.multivariate_normal(np.zeros(N), R) # get observation
+        prior_stack = np.stack(priors, 1)
+        inflated_priors = prior_mean + np.sqrt(inflation_coef) * (prior_stack - prior_mean) # inflate priorso
+
+        new_posteriors = eakf(Nens, N, inflated_priors, H, noise, 1, CMat, obs) # get posterior distribution
+        posterior_mean = np.mean(new_posteriors, axis=1)
+        analysis_error.append(distance(gt, posterior_mean))
+
+        ensembles = np.unstack(new_posteriors, axis=1)
+        #ensembles = np.moveaxis(new_posteriors, 1, 0) # my version of numpy is outdated
+
+    return l96_data[0::obs_freq][1:], background_error, analysis_error
+
+if __name__ == '__main__':
+    N = 40
+    np.random.seed(0)
+    initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), 0.01 * np.eye(N))
+
+    data, background_error, analysis_error = generate_eakf(
+        l96_args=(40, 8, 100, 0.01, 100),
+        initial_condition=initial_condition,
+        ensemble_condition=initial_condition,
+    #    distance=rmse,
+        distance=mae,
+        inflation_coef=3
+    )
+    length = len(data)
+    background_error = np.array(background_error)
+    analysis_error = np.array(analysis_error)
+
+    print('shapes: data %s, background_error %s, analysis_error %s' % (data.shape, background_error.shape, analysis_error.shape))
+
+    import matplotlib.pyplot as plt
+    plt.plot(np.arange(length - 1), background_error, label='Forecast Error')
+    plt.plot(np.arange(length - 1), analysis_error, label='Posterior Error')
+    plt.xlabel('Time Steps (s)')
+    plt.ylabel('MAE')
+    plt.title('MAE Comparison, Forecast vs Posterior Error')
+    plt.legend()
+    plt.show()
