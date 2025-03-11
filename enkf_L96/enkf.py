@@ -21,22 +21,23 @@ def eakf(ensemble_size, nobsgrid, zens, Hk, obs_error_var, localize, CMat, zobs)
     rn = 1.0 / (ensemble_size - 1) # normalization constant
     
     for iobs in range(0, nobsgrid): # for each observation coef:
+        #print('zens: ', zens.shape)
         xmean = np.mean(zens, axis=0)
-        print('xmean: ', xmean.shape)
+        #print('xmean: ', xmean.shape)
         xprime = zens - xmean # normalized ensemble
-        print('xprime: ', xprime.shape)
+        #print('xprime: ', xprime.shape)
         hxens = (zens.T.dot(Hk[iobs, :])).T  # gets the `iobs`-th value from each ensemble member (`iobs`-th column), 40*1
-        print('hxens: ', hxens.shape)
+        #print('hxens: ', hxens.shape)
         hxmean = np.mean(hxens, axis=0)
-        print('hxmean: ', hxmean.shape)
+        #print('hxmean: ', hxmean.shape)
         hxprime = hxens - hxmean # normalize the `iobs`-th values
-        print('hxprime: ', hxprime.shape)
+        #print('hxprime: ', hxprime.shape)
         hpbht = (hxprime.T.dot(hxprime) * rn) # rn * ||hxprime||^2
-        print('hpbht: ', hpbht)
+        #print('hpbht: ', hpbht)
         gainfact = (hpbht + obs_error_var) / hpbht * (1.0 - np.sqrt(obs_error_var / (hpbht + obs_error_var))) # Can't parse this well but used in calculating the increment?
-        print('gainfact: ', gainfact.shape)
+        #print('gainfact: ', gainfact.shape)
         pbht = (xprime.dot( hxprime)) * rn
-        print('pbht: ', pbht.shape)
+        #print('pbht: ', pbht.shape)
     
         if localize == 1:
             Cvect = CMat[iobs, :]
@@ -44,13 +45,13 @@ def eakf(ensemble_size, nobsgrid, zens, Hk, obs_error_var, localize, CMat, zobs)
         else:
             kfgain = pbht / (hpbht + obs_error_var)
 
-        print('kfgain: ', kfgain.shape)
+        #print('kfgain: ', kfgain.shape)
 
-        mean_inc = (kfgain * (zobs[0, iobs] - hxmean)).T # kfgain * observation error
+        mean_inc = (kfgain * (zobs[iobs] - hxmean)).T # kfgain * observation error
         mean_inc = np.stack([mean_inc for _ in range(ensemble_size)]).T
-        print('mean_inc: ', mean_inc.shape)
+        #print('mean_inc: ', mean_inc.shape)
         prime_inc = - (gainfact * kfgain.reshape(nobsgrid, 1) @ hxprime.reshape(1, ensemble_size)) # 
-        print('prime_inc: ', prime_inc.shape)
+        #print('prime_inc: ', prime_inc.shape)
 
         zens = zens + mean_inc + prime_inc
     return zens
@@ -62,7 +63,7 @@ if __name__ == '__main__':
     zens = np.ones((nobsgrid, ensemble_size))
     Hk = np.eye(nobsgrid)
     #Hk = np.asmatrix(np.zeros((nobsgrid, model_size)))
-    print('Hk: ', Hk.shape)
+    #print('Hk: ', Hk.shape)
     #for iobs in range(0, nobsgrid):
     #    x1 = obs_grids[iobs] 
     #    Hk[iobs, x1] = 1.0

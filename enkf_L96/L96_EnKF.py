@@ -8,49 +8,63 @@ Assuming independent observation errors, observations are serially assimilated.
 import numpy as np
 from construct_GC import construct_GC
 from enkf import eakf
+from L96_model import generate_l96, L96
 from os.path import dirname, join as pjoin
+from tqdm import tqdm
 
 np.random.seed(0)
 
 # --------------------- load data --------------------------
 data_dir = '../Data/'
-icsfname = pjoin(data_dir, 'l96_ics.npy')
-obsfname = pjoin(data_dir, 'l96_obs.npy')
-truthfname = pjoin(data_dir, 'l96_truth.npy')
-
-# get truth
-ztruth = np.load(truthfname)
-print('truth size:', ztruth.shape)
-
-# get initial condition
-zics_total = np.load(icsfname)
-print('ics size:', zics_total.shape)
-
-# get observation
-zobs_total = np.load(obsfname)
-print('obs size:', zobs_total.shape)
+#icsfname = pjoin(data_dir, 'l96_ics.npy')
+#obsfname = pjoin(data_dir, 'l96_obs.npy')
+#truthfname = pjoin(data_dir, 'l96_truth.npy')
 
 # ------------------ model parameters -----------------
 model_size = 40  # Nx
-L96 = L96(Nx=model_size)
+N = model_size
+F = 8
+timesteps = 400
+dt = 0.1
+
+L96 = L96(model_size, F, dt)
 
 # ------------------- observation parameters ------------------
-obs_density = 10 # observations are partial: uniformlly distributed for every 'obs_density' model grids 
-obs_error_var = 0.04 # observation error variance
+obs_density = 1 # observations are partial: uniformlly distributed for every 'obs_density' model grids 
+obs_error_var = 0.1 # observation error variance
 model_grids = np.arange(0, model_size)
 obs_grids = model_grids[model_grids % obs_density == 0] # 0, 10, 20, 30
 nobsgrid = len(obs_grids)
 
-R = np.mat(obs_error_var * np.eye(nobsgrid, nobsgrid)) # Observation identity matrix scaled by obs_error_var
+R = obs_error_var * np.eye(nobsgrid, nobsgrid) # Observation identity matrix scaled by obs_error_var
+
+zics, ztruth, zobs_total = generate_l96(model_size, F, timesteps, dt)
+
+zics_total = np.stack([zics + np.random.multivariate_normal(np.zeros(N), 0.01 * np.eye(N)) for _ in range(40)])
+
+# get truth
+#ztruth = np.load(truthfname)
+print('truth size:', ztruth.shape)
+
+# get initial condition
+#zics_total = np.load(icsfname)
+print('ics size:', zics_total.shape)
+
+# get observation
+#zobs_total = np.load(obsfname)
+print('obs size:', zobs_total.shape)
+
 
 # make observation operator H
-Hk = np.mat(np.zeros((nobsgrid, model_size))) # Maps observation into the model?
+Hk = np.zeros((nobsgrid, model_size)) # Maps observation into the model?
 for iobs in range(0, nobsgrid):
     x1 = obs_grids[iobs] 
     Hk[iobs, x1] = 1.0
 
-time_steps = 10000 # total number of model integration steps
-obs_freq_timestep = 20 # observations are infrequent in time: available every 'obs_freq_timestep' time steps
+#time_steps = 10000 # total number of model integration steps
+#obs_freq_timestep = 20 # observations are infrequent in time: available every 'obs_freq_timestep' time steps
+time_steps = 400
+obs_freq_timestep = 1
 model_times = np.arange(0, time_steps)
 obs_times = model_times[model_times % obs_freq_timestep == 0]
 nobstime = len(obs_times)
@@ -62,7 +76,7 @@ iobsend = int(time_steps/obs_freq_timestep)
 
 # eakf parameters
 ensemble_size = 40
-ens_mem_beg = 1
+ens_mem_beg = 0
 ens_mem_end = ens_mem_beg + ensemble_size
 inflation_values = [1.05]
 ninf = len(inflation_values)
@@ -86,8 +100,8 @@ for iinf in range(ninf): # only 1 pass
         localization_value = localization_values[iloc] # localization matrix cutoff distance
         print('localization:',localization_value)
 
-        CMat = np.mat(construct_GC(localization_value, model_size, obs_grids)) # Matrix used to "localize" Kalman gain matrix (restrict covariance, see yt video)
-        zens = np.mat(zics_total[ens_mem_beg: ens_mem_end, :])  # ensemble are drawn from ics set - this is our initial ensemble
+        CMat = construct_GC(localization_value, model_size, obs_grids) # Matrix used to "localize" Kalman gain matrix (restrict covariance, see yt video)
+        zens = zics_total[ens_mem_beg: ens_mem_end, :]  # ensemble are drawn from ics set - this is our initial ensemble
         zeakf_prior = np.zeros((model_size, nobstime)) # these four are for analysis purposes I think
         zeakf_analy = np.empty((model_size, nobstime))
         prior_spread = np.empty((model_size, nobstime))
@@ -98,9 +112,9 @@ for iinf in range(ninf): # only 1 pass
 
             # EnKF step
             obsstep = iassim * obs_freq_timestep + 1
-            zens = np.mat(zens)
+            #zens = np.mat(zens)
             zeakf_prior[:, iassim] = np.mean(zens, axis=0)  # prior ensemble mean - this is our forecast (computed by taking the mean of the ensembles)
-            zobs = np.mat(zobs_total[iassim, :]) # get observation
+            zobs = zobs_total[iassim, :] # get observation
 
             # inflation (Relaxaiton To Prior Perturbations)
             ensmean = np.mean(zens, axis=0) # forecast yet again

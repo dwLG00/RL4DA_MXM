@@ -41,6 +41,8 @@ class RLEnv(gym.Env):
             score = -np.linalg.norm(zens - action, ord=np.inf)
         elif self.score_type == 'logsupnorm':
             score = -np.log(np.linalg.norm(zens - action, ord=np.inf))
+        elif self.score_type == 'manhattan':
+            score = -np.linalg.norm(zens - action, ord=1)
         return score
 
     def step(self, action):
@@ -85,7 +87,7 @@ class RLEnv(gym.Env):
         self.count += 1
 
 
-        return input_vector, score, self.termination_rule(self.T, self.ensembles), False, self.__get_info()
+        return input_vector, score, self.termination_rule(self.count, self.T, self.ensembles), False, self.__get_info()
 
     def reset(self, seed=None, **kwargs):
         if not self.seed:
@@ -183,6 +185,8 @@ class RLEnsembleWiseEnv(gym.Env):
             score = -np.linalg.norm(zens - action, ord=np.inf)
         elif self.score_type == 'logsupnorm':
             score = -np.log(np.linalg.norm(zens - action, ord=np.inf))
+        elif self.score_type == 'manhattan':
+            score = -np.linalg.norm(zens - action, ord=1)
         return score
 
     def step(self, action):
@@ -230,7 +234,7 @@ class RLEnsembleWiseEnv(gym.Env):
         #next_obs = (next_index, self.last_error, self.ensembles[next_index])
         self.count += 1
 
-        return next_obs, score, self.termination_rule(self.T, self.ensembles), False, self.__get_info()
+        return next_obs, score, self.termination_rule(self.count, self.T, self.ensembles), False, self.__get_info()
 
     def reset(self, seed=None, **kwargs):
         if not self.seed:

@@ -8,9 +8,11 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNorm
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+import wandb
+from wandb.integration.sb3 import WandbCallback
 
 class Train:
-    def __init__(self, N=40, F=5, Nens=20, action_coef=1, observation_coef=1, score='rmse', seed=0, debug=False, model=RLEnv):
+    def __init__(self, N=40, F=5, Nens=20, action_coef=1, observation_coef=1, score='rmse', seed=0, debug=False, model=RLEnv, **kwargs):
         self.N = N
         self.F = F
         self.Nens = Nens
@@ -38,7 +40,7 @@ class Train:
 
         #initial_ensemble_noise = (np.zeros(self.N), identity)
         initial_ensemble_noise = (np.zeros(self.N), np.eye(observation_dimension) * noise)
-        termination_rule = lambda t, ens: t > 100
+        termination_rule = lambda c, t, ens: c >= 500
 
         self.rl_environment = model(derivative_func, state_dimension=self.N, observation_dimension=self.N, Nens=self.Nens,
             action_space=action_space, observation_space=observation_space, H=identity, noise=noise, initial_condition=initial_condition,
@@ -95,37 +97,54 @@ def main():
             return training_handler.rl_environment
         return wrapper
 
-    n_epochs = 150 # number of episodes
+    n_epochs = 1500 # number of episodes
     epoch_length = 500 # length of each episode
-    eval_freq = 1500 # training steps before evaluating
+    #eval_freq = 1500 # training steps before evaluating
 
-    #training_env = Train(score='logsupnorm').rl_environment
-    training_env = Train(model=RLEnsembleWiseEnv).rl_environment
-    eval_env = Train(model=RLEnsembleWiseEnv, seed=1).rl_environment
-    #eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
-    #    log_path='./logs/', eval_freq=eval_freq, deterministic=True,
-    #    render=False)
-    eval_callback = CustomEvalCallback(eval_env, epoch_length, eval_freq=eval_freq)
+    # wandb configs
+    config = {
+        "policy_type": "MlpPolicy",
+        "total_timesteps": epoch_length * n_epochs,
+        "n_epochs": 1500,
+        "N": 40,
+        "Nens": 20,
+        "F": 5,
+        "score": "manhattan"
+    }
+    run = wandb.init(
+        project="rl4da-1",
+        config=config,
+        sync_tensorboard=True,
+        monitor_gym=False,
+        save_code=True
+    )
+
+    training_env = Train(model=RLEnsembleWiseEnv, **config).rl_environment
 
     model = PPO("MlpPolicy", training_env,
         n_steps=epoch_length,
         n_epochs=n_epochs,
-        batch_size=epoch_length // 5,
+        batch_size=epoch_length,
         #batch_size=epoch_length // 10,
+        gamma=0.99**(1/20),
         #gamma=0.98, # reduce time horizon
         #ent_coef=0.15,
         #vf_coef=0.1,
         #clip_range_vf=0.2,
         #learning_rate=1e-5,
-        #clip_range=0.1,
+        clip_range=0.1,
+        tensorboard_log=f"runs/{run.id}",
         verbose=2
     )
     model.learn(
-        total_timesteps=epoch_length * n_epochs,
+        total_timesteps=config["total_timesteps"],
         log_interval=1,
         progress_bar=False,
-        callback=eval_callback
-    #    callback=value_callback
+        callback=WandbCallback(
+            #gradient_save_freq=epoch_length,
+            model_save_path=f"models/{run.id}",
+            verbose=2
+        )
     )
     model.save("lorenz96")
 
