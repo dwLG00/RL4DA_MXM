@@ -40,22 +40,22 @@ def mae(a, b):
 
 
 def generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, inflation_coef=1.1, distance=rmse):
-    N, F, timesteps, dt, obs_freq = l96_args
+    N, F, obs_freq, dt, timesteps = l96_args
     system = L96(N, F)
 
     H = np.eye(N)
     R = np.eye(N) * noise
     ground_truth = initial_condition() # (N,) array of initial points
-    ensembles = [ensemble_condition() for _ in range(Nens)] # (N, Nens) array, this is the ensemble around each truth
+    ensembles = [ensemble_condition(i) for i in range(Nens)] # (N, Nens) array, this is the ensemble around each truth
     l96_data = generate_l96(N, F, timesteps * obs_freq + 1, dt) # generate trailing, as we don't use the first data point
     t = 0
 
     CMat = construct_GC(3, N, np.arange(0, N))
 
     background_error, analysis_error = [], []
-    for i in tqdm(range(1, timesteps)):
+    for i in tqdm(range(1, obs_freq)):
         priors = ensembles[:]
-        for _ in range(obs_freq):
+        for _ in range(timesteps):
             priors = [runge_kutta_4(system.dx, ensemble, t, dt) for ensemble in priors]
             t += dt
         prior_mean = np.mean(priors) # prior mean
@@ -75,10 +75,50 @@ def generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ense
 
     return l96_data[0::obs_freq][1:], background_error, analysis_error
 
+def generate_training_data(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, localization_coef=3, inflation_coef=1.1):
+    N, F, obs_freq, dt, timesteps = l96_args
+    system = L96(N, F)
+
+    H = np.eye(N)
+    R = np.eye(N) * noise
+    ground_truth = initial_condition() # (N,) array of initial points
+    ensembles = [ensemble_condition(i) for i in range(Nens)] # (N, Nens) array, this is the ensemble around each truth
+    initial_ensembles = [array.copy() for array in ensembles] # deep copy, we will need this later
+    l96_data = generate_l96(N, F, timesteps * obs_freq + 1, dt) # generate trailing, as we don't use the first data point
+    t = 0
+    CMat = construct_GC(localization_coef, N, np.arange(0, N))
+
+    observations = []
+    ensembles_data = [[] for _ in range(Nens)]
+    for i in tqdm(range(obs_freq)):
+        priors = ensembles[:]
+        for _ in range(timesteps):
+            priors = [runge_kutta_4(system.dx, ensemble, t, dt) for ensemble in priors]
+            t += dt
+        prior_mean = np.mean(priors) # prior mean
+        gt = l96_data[i * timesteps, :] # ground truth
+
+        obs = H @ gt + np.random.multivariate_normal(np.zeros(N), R) # get observation
+        observations.append(obs)
+        prior_stack = np.stack(priors, 1)
+        inflated_priors = prior_mean + np.sqrt(inflation_coef) * (prior_stack - prior_mean) # inflate priorso
+
+        new_posteriors = eakf(Nens, N, inflated_priors, H, noise, 1, CMat, obs) # get posterior distribution
+        posterior_mean = np.mean(new_posteriors, axis=1)
+
+        ensembles = np.unstack(new_posteriors, axis=1)
+        for idx in range(Nens):
+            ensembles_data[idx].append(ensembles[idx])
+        #ensembles = np.moveaxis(new_posteriors, 1, 0) # my version of numpy is outdated
+
+    return np.array(observations), [np.array(ensemble) for ensemble in ensembles_data], initial_ensembles
+
+
 if __name__ == '__main__':
     N = 40
     np.random.seed(0)
     initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), 0.01 * np.eye(N))
+    ensemble_condition = lambda i: initial_condition()
 
     data, background_error, analysis_error = generate_eakf(
         l96_args=(40, 8, 100, 0.01, 100),

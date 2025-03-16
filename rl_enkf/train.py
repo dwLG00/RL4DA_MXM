@@ -1,4 +1,5 @@
 from rl_env import RLEnv, RLEnsembleWiseEnv
+from vectored_rl_env import ComponentRLEnv, generate_envs
 from l96 import L96
 import gymnasium as gym
 import numpy as np
@@ -123,7 +124,7 @@ def main():
         #batch_size=epoch_length // 10,
         gamma=0.99**(1/20),
         #gamma=0.98, # reduce time horizon
-        #ent_coef=0.15,
+        ent_coef=0.01,
         #vf_coef=0.1,
         #clip_range_vf=0.2,
         #learning_rate=1e-5,
@@ -143,6 +144,58 @@ def main():
     )
     model.save("lorenz96")
 
+def vectored_main():
+    device = torch.device("cpu")
+
+    l96_args = (
+        40, # N
+        8,  # F
+        500, # obs_freq
+        0.01, # dt
+        100 # timesteps
+    )
+    N = l96_args[0]
+    Nens = 20
+    noise = 0.1
+
+    epoch_length = l96_args[2]
+    n_epochs = 150
+
+    action_space = gym.spaces.Box(low=-1, high=1, shape=(40,), dtype=np.float32)
+    observation_space = gym.spaces.Box(low=-1, high=1, shape=(80,), dtype=np.float32)
+    initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), 0.01 * np.eye(N))
+    ensemble_condition = lambda i: initial_condition()
+    env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, inflation_coef=3, action_space=action_space, observation_space=observation_space)
+
+    env = SubprocVecEnv(env_functions)
+    config = {"policy_type": "MlpPolicy", "model_type": "ComponentRLModel", "total_timesteps": epoch_length * n_epochs,
+        "n_epochs": n_epochs, "score": "rmse"}
+    run = wandb.init(
+        project="rl4da-1",
+        config=config,
+        sync_tensorboard=True,
+        monitor_gym=False,
+        save_code=True
+    )
+    model = PPO(
+        "MlpPolicy",
+        env,
+        n_steps=epoch_length,
+        n_epochs=n_epochs,
+        batch_size=epoch_length // 4,
+        tensorboard_log=f"runs/{run.id}",
+        verbose=2
+    )
+    model.learn(
+        total_timesteps=epoch_length * n_epochs,
+        log_interval=1,
+        progress_bar=False,
+        callback=WandbCallback(
+            model_save_path=f"models/{run.id}",
+            verbose=2
+        )
+    )
 
 if __name__ == '__main__':
-    main()
+    #main()
+    vectored_main()
