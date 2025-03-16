@@ -10,6 +10,7 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 import wandb
 from wandb.integration.sb3 import WandbCallback
+from construct_gc import construct_GC
 
 class Train:
     def __init__(self, N=40, F=5, Nens=20, action_coef=1, observation_coef=1, score='rmse', seed=0, debug=False, model=RLEnv, **kwargs):
@@ -21,19 +22,9 @@ class Train:
         derivative_func = lambda x0, t: self.l96_system.dx(x0, t) # pass self
 
         observation_dimension = self.N
-
         identity = np.identity(self.N, dtype=np.float32)
         noise = 0.1
         initial_condition = lambda : np.ones(self.N, dtype=np.float32) + np.random.multivariate_normal(np.zeros(self.N), 0.1 * identity)
-
-        '''
-        indiv_action_bounds = action_coef * np.ones(self.N, dtype=np.float32)
-        indiv_obs_bounds = observation_coef * np.ones(self.N, dtype=np.float32)
-        action_bounds = np.concat([indiv_action_bounds[:] for _ in range(self.Nens)])
-        observation_bounds = np.concat([indiv_obs_bounds[:]] + [indiv_action_bounds[:] for _ in range(self.Nens)])
-        action_space = gym.spaces.Box(low=-action_bounds, high=action_bounds, dtype=np.float32)
-        observation_space = gym.spaces.Box(low=-observation_bounds, high=observation_bounds, dtype=np.float32)
-        '''
 
         action_space = gym.spaces.Box(low=-1, high=1, shape=(self.Nens * self.N,), dtype="float32")
         observation_space = gym.spaces.Box(low=-10, high=10, shape=((self.Nens + 1) * self.N,), dtype="float32")
@@ -44,7 +35,7 @@ class Train:
 
         self.rl_environment = model(derivative_func, state_dimension=self.N, observation_dimension=self.N, Nens=self.Nens,
             action_space=action_space, observation_space=observation_space, H=identity, noise=noise, initial_condition=initial_condition,
-            initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule, seed=seed, score=score, debug=debug)
+            initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule, seed=seed, score=score, debug=debug, **kwargs)
 
 # use for debugging
 def value_callback(_locals, _globals):
@@ -109,7 +100,11 @@ def main():
         "N": 40,
         "Nens": 20,
         "F": 5,
-        "score": "manhattan"
+        "score": "manhattan",
+        "localization_matrix": construct_GC(3, 40, np.arange(40)),
+        "inflation_coef": 3,
+        "dt": 0.01,
+        "ticks_per_step": 100
     }
     run = wandb.init(
         project="rl4da-1",

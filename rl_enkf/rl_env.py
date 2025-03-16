@@ -136,7 +136,9 @@ class RLEnsembleWiseEnv(gym.Env):
         Only after computing all ensemble members will a reward be provided.
     '''
     def __init__(self, derivative_func, dt=0.1, state_dimension=None, observation_dimension=None, Nens=40, action_space=None, observation_space=None, observation_bounds=1, H=None, noise=None,
-        initial_condition=None, initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None, score=None, debug=None, **kwargs):
+        initial_condition=None, initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, inflation_coef=1, localization_matrix=None, ticks_per_step=1, seed=None,
+        score=None, debug=None, **kwargs):
+
         super(RLEnsembleWiseEnv, self).__init__()
 
         self.debug = debug
@@ -157,12 +159,12 @@ class RLEnsembleWiseEnv(gym.Env):
             ground_truth_forward if ground_truth_forward != None
             else lambda x0, t, dt: runge_kutta_4(self.dx, x0, t, dt)
         )
-        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(self.state_dimension,), dtype=np.float32)
-        #self.observation_space = gym.spaces.Tuple((
-        #    gym.spaces.Discrete(self.ensemble_size),
-        #    gym.spaces.Box(low=-observation_bounds, high=observation_bounds, shape=(self.state_dimension,), dtype=np.float32),
-        #    gym.spaces.Box(low=-observation_bounds, high=observation_bounds, shape=(self.state_dimension,), dtype=np.float32)
-        #))
+        self.inflation_coef = inflation_coef
+        self.localization_matrix = localization_matrix
+        self.localize = 1 if self.localization_matrix is None else 0
+        self.ticks_per_step = ticks_per_step # number of times we "forward" the prior distribution (expensive)
+        #self.action_space = gym.spaces.Box(low=-1, high=1, shape=(self.state_dimension,), dtype=np.float32)
+        self.action_space = gym.spaces.Box(low=-10, high=10, shape=(self.state_dimension,), dtype=np.float32)
         self.observation_space = gym.spaces.Box(
             low=np.array([0] + [-observation_bounds] * 2 * self.state_dimension),
             high=np.array([self.ensemble_size] + [observation_bounds] * 2 * self.state_dimension),
@@ -207,23 +209,28 @@ class RLEnsembleWiseEnv(gym.Env):
 
             # forward timestep pass
             self.ensembles = [sum(z) for z in zip(self.ensembles, self.true_ensemble_diff)] # remember, true_ensemble_diff is the difference between zens (= self.ensembles) and the true (kalman) ensemble
-            priors = [
-                runge_kutta_4(self.dx, ensemble, self.T, self.dt)
-                for ensemble in self.ensembles
-            ]
+            priors = self.ensembles[:]
+            for _ in range(self.ticks_per_step):
+                priors = [
+                    runge_kutta_4(self.dx, ensemble, self.T, self.dt)
+                    for ensemble in self.ensembles
+                ]
+                self.T += self.dt
+                self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt) # update the ground truth
+
             forecast_mean = sum(priors) / self.ensemble_size
-            self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt) # update the ground truth
             observation = H @ self.ground_truth + self.np_random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance) # get observation, errors, and set them
             error = H @ forecast_mean - observation
             self.last_error = error
             self.last_obs = observation
 
             # compute true ensemble update step
-            zens = np.stack(self.ensembles, 1)
-            true_ensemble = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, False, None, self.last_obs)
+            zens = np.stack(priors, 1)
+            forecast_mean = forecast_mean.reshape((self.state_dimension, 1))
+            zens = forecast_mean + np.sqrt(self.inflation_coef) * (zens - forecast_mean) # inflation term
+            true_ensemble = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, self.localize, self.localization_matrix, self.last_obs)
             true_ensemble_diff = true_ensemble - zens
             self.true_ensemble_diff = np.unstack(true_ensemble_diff, axis=1)
-            self.T += self.dt
 
             # reset things
             self.actions = []
