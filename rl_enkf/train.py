@@ -159,13 +159,13 @@ def vectored_main():
     noise = 0.1
 
     epoch_length = l96_args[2]
-    n_epochs = 150
+    n_epochs = 1500
 
     action_space = gym.spaces.Box(low=-1, high=1, shape=(40,), dtype=np.float32)
     observation_space = gym.spaces.Box(low=-1, high=1, shape=(80,), dtype=np.float32)
     initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), 0.01 * np.eye(N))
     ensemble_condition = lambda i: initial_condition()
-    env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, inflation_coef=3, action_space=action_space, observation_space=observation_space)
+    env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=10, inflation_coef=3, action_space=action_space, observation_space=observation_space)
 
     env = SubprocVecEnv(env_functions)
     config = {"policy_type": "MlpPolicy", "model_type": "ComponentRLModel", "total_timesteps": epoch_length * n_epochs,

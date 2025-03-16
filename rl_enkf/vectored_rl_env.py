@@ -4,11 +4,24 @@ import data_generation
 
 class ComponentRLEnv(gym.Env):
     def __init__(self, observations, updates, initial_ensemble, start_pos=0, score_type='rmse', action_space=None, observation_space=None):
-        self.observations = observations
-        self.updates = updates
-        self.initial_ensemble = initial_ensemble
+        if isinstance(observations, np.ndarray):
+            observations = [observations]
+        if isinstance(updates, np.ndarray):
+            updates = [updates]
+        if isinstance(initial_ensemble, np.ndarray):
+            initial_ensemble = [initial_ensemble]
+
+        self.observations_backlog = observations
+        self.updates_backlog = updates
+        self.initial_ensemble_backlog = initial_ensemble
         self.start_pos = start_pos
         self.score_type = score_type
+
+        self.observations = None
+        self.updates = None
+        self.initial_ensemble = None
+        self.backlog_idx = None
+        self.backlog_count = len(self.observations_backlog)
 
         self.action_space = action_space
         self.observation_space = observation_space
@@ -37,22 +50,37 @@ class ComponentRLEnv(gym.Env):
 
     def reset(self, seed=False):
         self.pos = self.start_pos
+        if self.backlog_idx == None:
+            self.backlog_idx = 0
+        else:
+            self.backlog_idx = (self.backlog_idx + 1) % self.backlog_count
+        self.observations = self.observations_backlog[self.backlog_idx]
+        self.updates = self.updates_backlog[self.backlog_idx]
+        self.initial_ensemble = self.initial_ensemble_backlog[self.backlog_idx]
         return np.concat([self.observations[self.pos], self.initial_ensemble]), {}
 
 
-def generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, inflation_coef=1.1, localization_coef=3, **kwargs):
-    observations, ensembles, initial_ensembles = data_generation.generate_training_data(
-        l96_args=l96_args,
-        initial_condition=initial_condition,
-        ensemble_condition=ensemble_condition,
-        Nens=Nens,
-        noise=noise,
-        inflation_coef=inflation_coef,
-        localization_coef=localization_coef
-    )
+def generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=1, inflation_coef=1.1, localization_coef=3, **kwargs):
+    observations_backlog = []
+    updates_backlog = [[] for _ in range(Nens)]
+    initial_ensembles_backlog = [[] for _ in range(Nens)]
+    for _ in range(backlog_count):
+        observations, ensembles, initial_ensembles = data_generation.generate_training_data(
+            l96_args=l96_args,
+            initial_condition=initial_condition,
+            ensemble_condition=ensemble_condition,
+            Nens=Nens,
+            noise=noise,
+            inflation_coef=inflation_coef,
+            localization_coef=localization_coef
+        )
+        observations_backlog.append(observations)
+        for i in range(Nens):
+            updates_backlog[i].append(ensembles[i])
+            initial_ensembles_backlog[i].append(initial_ensembles[i])
 
     environment_functions = [
-        lambda: ComponentRLEnv(observations, ensembles[i], initial_ensembles[i], **kwargs)
+        lambda: ComponentRLEnv(observations, updates_backlog[i], initial_ensembles_backlog[i], **kwargs)
         for i in range(Nens)
     ]
     return environment_functions
