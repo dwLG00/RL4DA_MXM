@@ -8,7 +8,7 @@ from stable_baselines3 import SAC, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize, VecMonitor
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CallbackList
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from construct_gc import construct_GC
@@ -161,13 +161,21 @@ def vectored_main():
     epoch_length = l96_args[2]
     n_epochs = 1500
 
-    action_space = gym.spaces.Box(low=-1, high=1, shape=(40,), dtype=np.float32)
-    observation_space = gym.spaces.Box(low=-1, high=1, shape=(80,), dtype=np.float32)
+    #action_space = gym.spaces.Box(low=-1, high=1, shape=(40,), dtype=np.float32)
+    #observation_space = gym.spaces.Box(low=-1, high=1, shape=(80,), dtype=np.float32)
     initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), 0.01 * np.eye(N))
     ensemble_condition = lambda i: initial_condition()
-    env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=10, inflation_coef=3, action_space=action_space, observation_space=observation_space)
+    env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=10, inflation_coef=3)
+    eval_env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=1, inflation_coef=3)
 
     env = SubprocVecEnv(env_functions)
+    env = VecMonitor(env)
+    env = VecNormalize(env, norm_obs=True, norm_reward=True)
+
+    eval_env = SubprocVecEnv(eval_env_functions)
+    eval_env = VecMonitor(eval_env)
+    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True, training=False)
+
     config = {"policy_type": "MlpPolicy", "model_type": "ComponentRLModel", "total_timesteps": epoch_length * n_epochs,
         "n_epochs": n_epochs, "score": "rmse"}
     run = wandb.init(
@@ -186,14 +194,20 @@ def vectored_main():
         tensorboard_log=f"runs/{run.id}",
         verbose=2
     )
+
+    # Callbacks
+    wandb_callback = WandbCallback(
+        model_save_path=f"models/{run.id}",
+        verbose=2
+    )
+    eval_callback = EvalCallback(eval_env, best_model_save_path=f"models/{run.id}_eval_callback")
+    callback = CallbackList([eval_callback, wandb_callback])
+
     model.learn(
         total_timesteps=epoch_length * n_epochs,
         log_interval=1,
         progress_bar=False,
-        callback=WandbCallback(
-            model_save_path=f"models/{run.id}",
-            verbose=2
-        )
+        callback=callback
     )
 
 if __name__ == '__main__':

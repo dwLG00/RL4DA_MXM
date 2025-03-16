@@ -64,6 +64,8 @@ def generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, 
     observations_backlog = []
     updates_backlog = [[] for _ in range(Nens)]
     initial_ensembles_backlog = [[] for _ in range(Nens)]
+
+    obs_max, obs_min, act_max, act_min = 0, 0, 0, 0 #observation and action space bounds
     for _ in range(backlog_count):
         observations, ensembles, initial_ensembles = data_generation.generate_training_data(
             l96_args=l96_args,
@@ -75,12 +77,31 @@ def generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, 
             localization_coef=localization_coef
         )
         observations_backlog.append(observations)
+        obs_min = min(obs_min, np.min(observations))
+        obs_max = max(obs_max, np.max(observations))
         for i in range(Nens):
             updates_backlog[i].append(ensembles[i])
             initial_ensembles_backlog[i].append(initial_ensembles[i])
+            act_min = min(act_min, np.min(ensembles[i]))
+            act_max = max(act_max, np.max(ensembles[i]))
+
+    N = l96_args[0]
+    act_center = (act_max + act_min) / 2
+    act_min = act_center - abs(act_min - act_center) * 1.1 # give some leeway
+    act_max = act_center + abs(act_max - act_center) * 1.1
+
+    obs_center = (obs_max + obs_min) / 2
+    obs_min = obs_center - abs(obs_min - obs_center) * 1.1
+    obs_max = obs_center + abs(obs_max - obs_center) * 1.1
+    # Need to specify observation ranges separately bc we pass posterior ensembles to the model asw
+    obs_low = np.concat([np.ones(N) * obs_min, np.ones(N) * act_min])
+    obs_high = np.concat([np.ones(N) * obs_max, np.ones(N) * act_max])
+
+    action_space = gym.spaces.Box(low=act_min, high=act_max, shape=(N,), dtype=np.float32)
+    observation_space = gym.spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
 
     environment_functions = [
-        lambda: ComponentRLEnv(observations, updates_backlog[i], initial_ensembles_backlog[i], **kwargs)
+        lambda: ComponentRLEnv(observations, updates_backlog[i], initial_ensembles_backlog[i], action_space=action_space, observation_space=observation_space, **kwargs)
         for i in range(Nens)
     ]
     return environment_functions
