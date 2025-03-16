@@ -12,6 +12,7 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, Callb
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from construct_gc import construct_GC
+import pickle
 
 class Train:
     def __init__(self, N=40, F=5, Nens=20, action_coef=1, observation_coef=1, score='rmse', seed=0, debug=False, model=RLEnv, **kwargs):
@@ -163,7 +164,7 @@ def vectored_main():
 
     #action_space = gym.spaces.Box(low=-1, high=1, shape=(40,), dtype=np.float32)
     #observation_space = gym.spaces.Box(low=-1, high=1, shape=(80,), dtype=np.float32)
-    initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), 0.01 * np.eye(N))
+    initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), noise * np.eye(N))
     ensemble_condition = lambda i: initial_condition()
     env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=10, inflation_coef=3)
     eval_env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=1, inflation_coef=3)
@@ -190,7 +191,7 @@ def vectored_main():
         env,
         n_steps=epoch_length,
         n_epochs=n_epochs,
-        batch_size=epoch_length // 4,
+        batch_size=epoch_length // 5,
         tensorboard_log=f"runs/{run.id}",
         verbose=2
     )
@@ -204,11 +205,13 @@ def vectored_main():
     callback = CallbackList([eval_callback, wandb_callback])
 
     model.learn(
-        total_timesteps=epoch_length * n_epochs,
+        total_timesteps=epoch_length * n_epochs * Nens,
         log_interval=1,
         progress_bar=False,
         callback=callback
     )
+    model.save(f"final_models/{run.id}")
+    env.save(f"final_models/{run.id}-vec_normalize.pkl")
 
 if __name__ == '__main__':
     #main()

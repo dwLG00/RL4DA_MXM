@@ -3,7 +3,7 @@ import numpy as np
 import data_generation
 
 class ComponentRLEnv(gym.Env):
-    def __init__(self, observations, updates, initial_ensemble, start_pos=0, score_type='rmse', action_space=None, observation_space=None):
+    def __init__(self, observations, updates, initial_ensemble, start_pos=0, score_type='rmse', action_space=None, observation_space=None, rank=0):
         if isinstance(observations, np.ndarray):
             observations = [observations]
         if isinstance(updates, np.ndarray):
@@ -27,6 +27,7 @@ class ComponentRLEnv(gym.Env):
         self.observation_space = observation_space
 
         self.identifier = 'ComponentRLEnv'
+        self.rank_array = np.array([rank])
 
     def score(self, truth, action):
         if self.score_type == 'rmse':
@@ -44,9 +45,9 @@ class ComponentRLEnv(gym.Env):
         score = self.score(action, truth)
         self.pos += 1
         if self.pos < self.observations.shape[0]:
-            observation = np.concat([self.observations[self.pos], truth])
+            observation = np.concat([self.rank_array, self.observations[self.pos], truth])
             return observation, score, False, False, {}
-        return np.concat([self.observations[0], truth]), score, True, False, {} # Terminate
+        return np.concat([self.rank_array, self.observations[0], truth]), score, True, False, {} # Terminate
 
     def reset(self, seed=False):
         self.pos = self.start_pos
@@ -57,7 +58,7 @@ class ComponentRLEnv(gym.Env):
         self.observations = self.observations_backlog[self.backlog_idx]
         self.updates = self.updates_backlog[self.backlog_idx]
         self.initial_ensemble = self.initial_ensemble_backlog[self.backlog_idx]
-        return np.concat([self.observations[self.pos], self.initial_ensemble]), {}
+        return np.concat([self.rank_array, self.observations[self.pos], self.initial_ensemble]), {}
 
 
 def generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=1, inflation_coef=1.1, localization_coef=3, **kwargs):
@@ -93,15 +94,15 @@ def generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, 
     obs_center = (obs_max + obs_min) / 2
     obs_min = obs_center - abs(obs_min - obs_center) * 1.1
     obs_max = obs_center + abs(obs_max - obs_center) * 1.1
-    # Need to specify observation ranges separately bc we pass posterior ensembles to the model asw
-    obs_low = np.concat([np.ones(N) * obs_min, np.ones(N) * act_min])
-    obs_high = np.concat([np.ones(N) * obs_max, np.ones(N) * act_max])
+    # Need to specify observation ranges separately bc we pass rank and posterior ensembles to the model asw
+    obs_low = np.concat([0, np.ones(N) * obs_min, np.ones(N) * act_min])
+    obs_high = np.concat([Nens - 1, np.ones(N) * obs_max, np.ones(N) * act_max])
 
     action_space = gym.spaces.Box(low=act_min, high=act_max, shape=(N,), dtype=np.float32)
     observation_space = gym.spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
 
     environment_functions = [
-        lambda: ComponentRLEnv(observations, updates_backlog[i], initial_ensembles_backlog[i], action_space=action_space, observation_space=observation_space, **kwargs)
+        lambda: ComponentRLEnv(observations, updates_backlog[i], initial_ensembles_backlog[i], action_space=action_space, observation_space=observation_space, rank=i, **kwargs)
         for i in range(Nens)
     ]
     return environment_functions
