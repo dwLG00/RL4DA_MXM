@@ -34,12 +34,13 @@ def runge_kutta_4(func, x0, t, dt):
     return x0 + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
 def rmse(a, b):
+    N = a.shape[0]
     return np.sqrt(np.linalg.norm(a - b) / N)
 
 def mae(a, b):
     return np.mean(np.abs(a - b))
 
-def _generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, inflation_coef=1.1, distance=rmse):
+def _generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, inflation_coef=1.1, distance=rmse, model=None):
     N, F, obs_freq, dt, timesteps = l96_args
     system = L96(N, F)
 
@@ -59,7 +60,7 @@ def _generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ens
             priors = [runge_kutta_4(system.dx, ensemble, t, dt) for ensemble in priors]
             t += dt
         prior_mean = sum(priors) / Nens # prior mean
-        gt = l96_data[i * obs_freq, :] # ground truth
+        gt = l96_data[i * timesteps, :] # ground truth
         ground_truth.append(gt)
         priors_array.append(prior_mean)
         #background_error.append(distance(gt, prior_mean)) # forecast vs ground truth
@@ -80,7 +81,7 @@ def _generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ens
     return np.array(ground_truth), np.array(priors_array), np.array(posteriors_array)
 
 
-def generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, inflation_coef=1.1, distance=rmse):
+def generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, inflation_coef=1.1, distance=rmse, model=None):
     N, F, obs_freq, dt, timesteps = l96_args
     system = L96(N, F)
 
@@ -100,7 +101,7 @@ def generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ense
             priors = [runge_kutta_4(system.dx, ensemble, t, dt) for ensemble in priors]
             t += dt
         prior_mean = np.mean(priors) # prior mean
-        gt = l96_data[i * obs_freq, :] # ground truth
+        gt = l96_data[i * timesteps, :] # ground truth
         background_error.append(distance(gt, prior_mean)) # forecast vs ground truth
 
         obs = H @ gt + np.random.multivariate_normal(np.zeros(N), R) # get observation
@@ -114,7 +115,7 @@ def generate_eakf(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ense
         ensembles = np.unstack(new_posteriors, axis=1)
         #ensembles = np.moveaxis(new_posteriors, 1, 0) # my version of numpy is outdated
 
-    return l96_data[0::obs_freq][1:], background_error, analysis_error
+    return l96_data[0::timesteps][1:], background_error, analysis_error
 
 def generate_training_data(l96_args=(40, 8, 100, 0.01, 100), initial_condition=None, ensemble_condition=None, Nens=20, noise=0.1, localization_coef=3, inflation_coef=1.1):
     N, F, obs_freq, dt, timesteps = l96_args
@@ -214,5 +215,24 @@ def error_figure():
     plt.legend()
     plt.show()
 
+def surface_figure():
+    N = 40
+    F = 5
+    T = 100
+    data = generate_l96(N, F, T, 0.01)
+
+    x = np.arange(N)
+    y = np.arange(T) * 0.01
+    x, y = np.meshgrid(x, y)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot_surface(x, y, data, cmap='viridis')
+    ax.set_xlabel('Position')
+    ax.set_ylabel('Time')
+    ax.set_zlabel('Magnitude')
+    plt.show()
+
 if __name__ == '__main__':
-    snapshot_figure()
+    #snapshot_figure()
+    surface_figure()
