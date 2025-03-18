@@ -1,5 +1,5 @@
 from rl_env import RLEnv, RLEnsembleWiseEnv
-from vectored_rl_env import ComponentRLEnv, generate_envs
+from vectored_rl_env import ComponentRLEnv, generate_envs, generate_envs_from_save
 from l96 import L96
 import gymnasium as gym
 import numpy as np
@@ -166,16 +166,18 @@ def vectored_main():
     #observation_space = gym.spaces.Box(low=-1, high=1, shape=(80,), dtype=np.float32)
     initial_condition = lambda: np.ones(N) + np.random.multivariate_normal(np.zeros(N), noise * np.eye(N))
     ensemble_condition = lambda i: initial_condition()
-    env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=10, inflation_coef=3)
-    eval_env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=1, inflation_coef=3)
+    #env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=10, inflation_coef=3, save=True, save_path="env_train_data")
+    env_functions = generate_envs_from_save("env_train_data")
+    #eval_env_functions = generate_envs(l96_args, initial_condition, ensemble_condition, Nens, noise, backlog_count=1, inflation_coef=3, save=True, save_path="env_test_data")
+    eval_env_functions = generate_envs_from_save("env_test_data")
 
     env = SubprocVecEnv(env_functions)
     env = VecMonitor(env)
-    env = VecNormalize(env, norm_obs=True, norm_reward=True)
+    #env = VecNormalize(env, norm_obs=True, norm_reward=True)
 
     eval_env = SubprocVecEnv(eval_env_functions)
     eval_env = VecMonitor(eval_env)
-    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True, training=False)
+    #eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True, training=False)
 
     config = {"policy_type": "MlpPolicy", "model_type": "ComponentRLModel", "total_timesteps": epoch_length * n_epochs,
         "n_epochs": n_epochs, "score": "rmse"}
@@ -211,7 +213,7 @@ def vectored_main():
         callback=callback
     )
     model.save(f"final_models/{run.id}")
-    env.save(f"final_models/{run.id}-vec_normalize.pkl")
+    #env.save(f"final_models/{run.id}-vec_normalize.pkl")
 
 if __name__ == '__main__':
     #main()
